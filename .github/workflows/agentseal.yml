@@ -1,0 +1,62 @@
+name: AgentSeal Security
+on:
+  push:
+    branches: [main]
+
+permissions:
+  security-events: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    name: Agent Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install agentseal
+      - name: Run AgentSeal Guard
+        run: |
+          agentseal guard \
+            --ci \
+            --fail-on high \
+            --output sarif \
+            --save results.sarif \
+            --anonymize
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: agentseal
+      - name: Comment on PR with Security Results
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const sarif = JSON.parse(fs.readFileSync('results.sarif', 'utf8'));
+            
+            const results = sarif.runs[0].results || [];
+            
+            if (results.length === 0) {
+              console.log('No security issues found');
+              return;
+            }
+            
+            let comment = '## 🔒 AgentSeal Security Scan Results\n\n';
+            comment += `Found **${results.length}** issue(s):\n\n`;
+            
+            results.forEach((result, index) => {
+              const severity = result.level || 'warning';
+              const message = result.message.text || result.message;
+              const location = result.locations?.[0]?.physicalLocation?.artifactLocation?.uri || 'Unknown file';
+              
+              comment += `${index + 1}. **[${severity.toUpperCase()}]** ${message}\n`;
+              comment += `   📁 File: \`${location}\`\n\n`;
+            });
+            
+            console.log(comment);
